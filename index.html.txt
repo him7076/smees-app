@@ -1,0 +1,864 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { 
+  LayoutDashboard, 
+  ReceiptText, 
+  CheckSquare, 
+  Users, 
+  Plus, 
+  Search, 
+  ChevronRight, 
+  Trash2, 
+  ArrowUpRight, 
+  ArrowDownLeft, 
+  Package, 
+  Settings,
+  X,
+  Calendar,
+  Phone,
+  MapPin,
+  Filter,
+  Download,
+  Upload,
+  MoreVertical
+} from 'lucide-react';
+
+/** * NEXUS ERP - Mobile-First Accounting & Task Management
+ * Tech: React, Tailwind, LocalStorage
+ */
+
+const STORAGE_KEY = 'NEXUS_ERP_DATA_V1';
+
+const INITIAL_DATA = {
+  company: {
+    name: "My Enterprise",
+    mobile: "",
+    address: "",
+    financialYear: "2024-25",
+    currency: "₹"
+  },
+  parties: [],
+  items: [],
+  staff: [],
+  transactions: [], // sales, purchase, expenses, payments
+  tasks: [],
+  categories: {
+    expense: ["Rent", "Electricity", "Marketing", "Salary"],
+    item: ["Electronics", "Services", "General"]
+  },
+  counters: {
+    party: 100,
+    item: 100,
+    staff: 100,
+    transaction: 1000,
+    task: 500
+  }
+};
+
+// --- HELPER FUNCTIONS ---
+
+const getNextId = (data, type) => {
+  const prefix = type.charAt(0).toUpperCase();
+  const num = data.counters[type];
+  return { id: `${prefix}-${num}`, nextCounters: { ...data.counters, [type]: num + 1 } };
+};
+
+const formatCurrency = (amount) => {
+  const val = parseFloat(amount || 0);
+  return `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+};
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+};
+
+// --- COMPONENTS ---
+
+const Modal = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4">
+      <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-hidden flex flex-col animate-in slide-in-from-bottom duration-300">
+        <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white">
+          <h2 className="text-lg font-bold text-gray-800">{title}</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full"><X size={24} /></button>
+        </div>
+        <div className="p-4 overflow-y-auto pb-20">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+const SearchableSelect = ({ label, options, value, onChange, onAddNew, placeholder = "Select..." }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const wrapperRef = useRef(null);
+
+  const filtered = options.filter(opt => opt.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  return (
+    <div className="relative mb-4" ref={wrapperRef}>
+      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">{label}</label>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full p-3 border rounded-xl bg-gray-50 flex justify-between items-center cursor-pointer"
+      >
+        <span className={value ? 'text-gray-900' : 'text-gray-400'}>
+          {value ? options.find(o => o.id === value)?.name : placeholder}
+        </span>
+        <Search size={16} className="text-gray-400" />
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-[60] mt-1 w-full bg-white border rounded-xl shadow-xl max-h-60 overflow-y-auto">
+          <div className="sticky top-0 p-2 bg-white border-b">
+            <input 
+              autoFocus
+              className="w-full p-2 text-sm border-none focus:ring-0" 
+              placeholder="Search..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          {filtered.map(opt => (
+            <div 
+              key={opt.id} 
+              className="p-3 hover:bg-blue-50 cursor-pointer text-sm border-b last:border-0"
+              onClick={() => { onChange(opt.id); setIsOpen(false); setSearchTerm(''); }}
+            >
+              {opt.name} <span className="text-xs text-gray-400 ml-2">({opt.id})</span>
+            </div>
+          ))}
+          {onAddNew && (
+            <div 
+              className="p-3 text-blue-600 font-medium text-sm flex items-center gap-2 cursor-pointer hover:bg-blue-50"
+              onClick={() => { onAddNew(); setIsOpen(false); }}
+            >
+              <Plus size={16} /> Add New
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function App() {
+  const [data, setData] = useState(INITIAL_DATA);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [modal, setModal] = useState({ type: null, data: null });
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  // Persistence
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) setData(JSON.parse(saved));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }, [data]);
+
+  // --- ACTIONS ---
+  
+  const saveRecord = (collection, record, idType) => {
+    let newData = { ...data };
+    if (record.id) {
+      // Update
+      newData[collection] = data[collection].map(r => r.id === record.id ? record : r);
+    } else {
+      // Create
+      const { id, nextCounters } = getNextId(data, idType);
+      const newRecord = { ...record, id, createdAt: new Date().toISOString() };
+      newData[collection] = [...data[collection], newRecord];
+      newData.counters = nextCounters;
+    }
+    setData(newData);
+    setModal({ type: null, data: null });
+  };
+
+  const deleteRecord = (collection, id) => {
+    setData(prev => ({
+      ...prev,
+      [collection]: prev[collection].filter(r => r.id !== id)
+    }));
+    setConfirmDelete(null);
+    setModal({ type: null, data: null });
+  };
+
+  // --- CALCULATIONS ---
+
+  const stockMap = useMemo(() => {
+    const map = {};
+    data.items.forEach(item => {
+      map[item.id] = parseFloat(item.openingStock || 0);
+    });
+    data.transactions.forEach(tx => {
+      if (tx.type === 'sales' || tx.type === 'purchase' || tx.type === 'expense') {
+        tx.items?.forEach(line => {
+          if (tx.type === 'purchase') map[line.itemId] = (map[line.itemId] || 0) + parseFloat(line.qty);
+          if (tx.type === 'sales' || tx.type === 'expense') map[line.itemId] = (map[line.itemId] || 0) - parseFloat(line.qty);
+        });
+      }
+    });
+    return map;
+  }, [data.transactions, data.items]);
+
+  const stats = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const todaySales = data.transactions
+      .filter(tx => tx.type === 'sales' && tx.date === today)
+      .reduce((acc, tx) => acc + parseFloat(tx.finalTotal || 0), 0);
+    
+    const totalExpenses = data.transactions
+      .filter(tx => tx.type === 'expense')
+      .reduce((acc, tx) => acc + parseFloat(tx.finalTotal || 0), 0);
+
+    const pendingTasks = data.tasks.filter(t => t.status !== 'Done').length;
+    
+    const lowStock = data.items.filter(item => (stockMap[item.id] || 0) < 5);
+
+    return { todaySales, totalExpenses, pendingTasks, lowStockCount: lowStock.length };
+  }, [data, stockMap]);
+
+  // --- VIEWS ---
+
+  const Dashboard = () => (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">{data.company.name}</h1>
+          <p className="text-sm text-gray-500">FY {data.company.financialYear}</p>
+        </div>
+        <button onClick={() => setModal({ type: 'company' })} className="p-2 bg-gray-100 rounded-xl">
+          <Settings className="text-gray-600" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
+          <p className="text-xs font-bold text-green-600 uppercase">Today Sales</p>
+          <p className="text-xl font-bold text-green-900">{formatCurrency(stats.todaySales)}</p>
+        </div>
+        <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+          <p className="text-xs font-bold text-red-600 uppercase">Expenses</p>
+          <p className="text-xl font-bold text-red-900">{formatCurrency(stats.totalExpenses)}</p>
+        </div>
+        <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+          <p className="text-xs font-bold text-blue-600 uppercase">Pending Tasks</p>
+          <p className="text-xl font-bold text-blue-900">{stats.pendingTasks}</p>
+        </div>
+        <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100">
+          <p className="text-xs font-bold text-orange-600 uppercase">Low Stock</p>
+          <p className="text-xl font-bold text-orange-900">{stats.lowStockCount} Items</p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <h3 className="font-bold text-gray-700">Quick Actions</h3>
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { label: 'Sale', icon: <ArrowUpRight />, type: 'sales', color: 'bg-green-100 text-green-700' },
+            { label: 'Purchase', icon: <ArrowDownLeft />, type: 'purchase', color: 'bg-blue-100 text-blue-700' },
+            { label: 'Expense', icon: <ReceiptText />, type: 'expense', color: 'bg-red-100 text-red-700' },
+            { label: 'Payment', icon: <Package />, type: 'payment', color: 'bg-purple-100 text-purple-700' }
+          ].map(action => (
+            <button 
+              key={action.label}
+              onClick={() => setModal({ type: action.type })}
+              className="flex flex-col items-center gap-2"
+            >
+              <div className={`p-4 rounded-2xl ${action.color}`}>{action.icon}</div>
+              <span className="text-xs font-medium text-gray-600">{action.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const MasterList = ({ title, collection, type, idKey, fields }) => {
+    const [search, setSearch] = useState('');
+    const filtered = data[collection].filter(item => 
+      Object.values(item).some(val => String(val).toLowerCase().includes(search.toLowerCase()))
+    );
+
+    return (
+      <div className="space-y-4">
+        <div className="flex justify-between items-center">
+          <h1 className="text-xl font-bold">{title}</h1>
+          <button 
+            onClick={() => setModal({ type })}
+            className="p-2 bg-blue-600 text-white rounded-xl flex items-center gap-1 text-sm px-4"
+          >
+            <Plus size={18} /> Add
+          </button>
+        </div>
+
+        <div className="relative">
+          <Search className="absolute left-3 top-3 text-gray-400" size={18} />
+          <input 
+            className="w-full pl-10 pr-4 py-3 bg-gray-100 border-none rounded-xl focus:ring-2 focus:ring-blue-500" 
+            placeholder={`Search ${title}...`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          {filtered.map(item => (
+            <div 
+              key={item.id}
+              onClick={() => setModal({ type, data: item })}
+              className="p-4 bg-white border rounded-2xl flex justify-between items-center active:scale-95 transition-transform"
+            >
+              <div>
+                <p className="font-bold text-gray-800">{item.name}</p>
+                <p className="text-xs text-gray-500">{item.id} • {item.mobile || item.category || item.role}</p>
+              </div>
+              <ChevronRight className="text-gray-300" />
+            </div>
+          ))}
+          {filtered.length === 0 && <p className="text-center text-gray-400 py-10">No records found</p>}
+        </div>
+      </div>
+    );
+  };
+
+  const TaskModule = () => {
+    const pending = data.tasks.filter(t => t.status !== 'Done');
+    const done = data.tasks.filter(t => t.status === 'Done');
+
+    const TaskItem = ({ task }) => (
+      <div 
+        onClick={() => setModal({ type: 'task', data: task })}
+        className="p-4 bg-white border rounded-2xl mb-2 flex justify-between items-start"
+      >
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`w-2 h-2 rounded-full ${task.status === 'Done' ? 'bg-green-500' : 'bg-orange-500'}`} />
+            <p className="font-bold text-gray-800">{task.name}</p>
+          </div>
+          <p className="text-xs text-gray-500 line-clamp-1">{task.description}</p>
+          <div className="flex gap-3 mt-2 text-[10px] font-bold text-gray-400 uppercase">
+            <span className="flex items-center gap-1"><Calendar size={10} /> {formatDate(task.dueDate)}</span>
+            <span className="flex items-center gap-1"><Users size={10} /> {task.assignedStaff?.length || 0} Staff</span>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] bg-gray-100 px-2 py-0.5 rounded-full font-bold">{task.id}</p>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h1 className="text-xl font-bold">Tasks</h1>
+          <button onClick={() => setModal({ type: 'task' })} className="p-2 bg-blue-600 text-white rounded-xl"><Plus /></button>
+        </div>
+
+        <div>
+          <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Pending ({pending.length})</h3>
+          {pending.map(t => <TaskItem key={t.id} task={t} />)}
+        </div>
+
+        <div>
+          <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Completed ({done.length})</h3>
+          <div className="opacity-60">
+            {done.map(t => <TaskItem key={t.id} task={t} />)}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const TransactionList = () => {
+    const [filter, setFilter] = useState('all');
+    const filtered = data.transactions
+      .filter(tx => filter === 'all' || tx.type === filter)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return (
+      <div className="space-y-4">
+        <div className="flex justify-between items-center">
+          <h1 className="text-xl font-bold">Accounting</h1>
+          <div className="flex gap-2">
+            <button onClick={() => {
+              const csv = "Date,Type,Party,Total\n" + data.transactions.map(t => `${t.date},${t.type},${t.partyId},${t.finalTotal}`).join("\n");
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.setAttribute('hidden', '');
+              a.setAttribute('href', url);
+              a.setAttribute('download', 'transactions.csv');
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }} className="p-2 bg-gray-100 rounded-lg text-xs font-bold flex items-center gap-1">
+              <Download size={14} /> Export
+            </button>
+          </div>
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+          {['all', 'sales', 'purchase', 'expense', 'payment'].map(t => (
+            <button 
+              key={t}
+              onClick={() => setFilter(t)}
+              className={`px-4 py-2 rounded-full text-xs font-bold capitalize whitespace-nowrap border ${filter === t ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-3">
+          {filtered.map(tx => {
+            const party = data.parties.find(p => p.id === tx.partyId);
+            const isIncoming = tx.type === 'sales' || (tx.type === 'payment' && tx.subType === 'in');
+            return (
+              <div 
+                key={tx.id}
+                onClick={() => setModal({ type: tx.type, data: tx })}
+                className="p-4 bg-white border rounded-2xl flex justify-between items-center"
+              >
+                <div className="flex gap-4 items-center">
+                  <div className={`p-2 rounded-full ${isIncoming ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                    {isIncoming ? <ArrowDownLeft size={16} /> : <ArrowUpRight size={16} />}
+                  </div>
+                  <div>
+                    <p className="font-bold text-gray-800">{party?.name || tx.category || 'N/A'}</p>
+                    <p className="text-[10px] text-gray-400 uppercase font-bold">{tx.id} • {formatDate(tx.date)}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className={`font-bold ${isIncoming ? 'text-green-600' : 'text-red-600'}`}>
+                    {isIncoming ? '+' : '-'}{formatCurrency(tx.finalTotal || tx.amount)}
+                  </p>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">{tx.type}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // --- FORMS ---
+
+  const CompanyForm = () => {
+    const [form, setForm] = useState(data.company);
+    return (
+      <div className="space-y-4">
+        <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Company Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+        <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
+        <textarea className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Address" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+        <div className="grid grid-cols-2 gap-4">
+          <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="FY" value={form.financialYear} onChange={e => setForm({...form, financialYear: e.target.value})} />
+          <div className="p-3 bg-gray-100 border rounded-xl text-gray-500">Currency: ₹</div>
+        </div>
+        <button onClick={() => { setData({...data, company: form}); setModal({type: null}); }} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold">Save Settings</button>
+      </div>
+    );
+  };
+
+  const PartyForm = ({ record }) => {
+    const [form, setForm] = useState(record || { name: '', mobile: '', email: '', openingBal: 0, type: 'CR', address: '', location: '', reference: '' });
+    
+    const handleSave = () => {
+      if (!form.name) return;
+      if (!record && data.parties.some(p => p.name.toLowerCase() === form.name.toLowerCase())) {
+        alert("Party name already exists!");
+        return;
+      }
+      saveRecord('parties', form, 'party');
+    };
+
+    return (
+      <div className="space-y-4">
+        {form.id && <p className="text-xs font-bold text-gray-400 uppercase">ID: {form.id}</p>}
+        <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Party Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+        <div className="grid grid-cols-2 gap-4">
+          <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
+          <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+        </div>
+        <div className="flex gap-2 items-center">
+          <input className="flex-1 p-3 bg-gray-50 border rounded-xl" type="number" placeholder="Opening Balance" value={form.openingBal} onChange={e => setForm({...form, openingBal: e.target.value})} />
+          <select className="p-3 bg-gray-50 border rounded-xl" value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
+            <option value="CR">CR</option>
+            <option value="DR">DR</option>
+          </select>
+        </div>
+        <SearchableSelect 
+          label="Reference" 
+          options={data.parties} 
+          value={form.reference} 
+          onChange={v => setForm({...form, reference: v})} 
+        />
+        <textarea className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Address" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+        
+        <div className="flex gap-2">
+          <button onClick={handleSave} className="flex-1 bg-blue-600 text-white p-4 rounded-xl font-bold">Save Party</button>
+          {record && <button onClick={() => setConfirmDelete({ collection: 'parties', id: record.id })} className="p-4 bg-red-100 text-red-600 rounded-xl"><Trash2 /></button>}
+        </div>
+      </div>
+    );
+  };
+
+  const ItemForm = ({ record }) => {
+    const [form, setForm] = useState(record || { name: '', unit: 'PCS', sellPrice: 0, buyPrice: 0, category: '', type: 'Goods', openingStock: 0 });
+
+    const handleSave = () => {
+      if (!form.name) return;
+      if (!record && data.items.some(i => i.name.toLowerCase() === form.name.toLowerCase())) {
+        alert("Item name already exists!");
+        return;
+      }
+      saveRecord('items', form, 'item');
+    };
+
+    return (
+      <div className="space-y-4">
+        {form.id && <p className="text-xs font-bold text-gray-400 uppercase">ID: {form.id}</p>}
+        <input className="w-full p-3 bg-gray-50 border rounded-xl font-bold" placeholder="Item Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+        <div className="grid grid-cols-2 gap-4">
+          <select className="p-3 bg-gray-50 border rounded-xl" value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
+            <option>Goods</option>
+            <option>Service</option>
+            <option>Expense Item</option>
+          </select>
+          <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Unit (e.g. PCS, KG)" value={form.unit} onChange={e => setForm({...form, unit: e.target.value})} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-[10px] font-bold text-gray-400 ml-2">Sale Price</label>
+            <input className="w-full p-3 bg-gray-50 border rounded-xl" type="number" value={form.sellPrice} onChange={e => setForm({...form, sellPrice: e.target.value})} />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-gray-400 ml-2">Purchase Price</label>
+            <input className="w-full p-3 bg-gray-50 border rounded-xl" type="number" value={form.buyPrice} onChange={e => setForm({...form, buyPrice: e.target.value})} />
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 ml-2">Opening Stock</label>
+          <input className="w-full p-3 bg-gray-50 border rounded-xl" type="number" value={form.openingStock} onChange={e => setForm({...form, openingStock: e.target.value})} />
+        </div>
+        
+        <div className="flex gap-2 pt-4">
+          <button onClick={handleSave} className="flex-1 bg-blue-600 text-white p-4 rounded-xl font-bold">Save Item</button>
+          {record && <button onClick={() => setConfirmDelete({ collection: 'items', id: record.id })} className="p-4 bg-red-100 text-red-600 rounded-xl"><Trash2 /></button>}
+        </div>
+      </div>
+    );
+  };
+
+  const TransactionForm = ({ type, record }) => {
+    const isEdit = !!record;
+    const [tx, setTx] = useState(record || {
+      type,
+      date: new Date().toISOString().split('T')[0],
+      partyId: '',
+      items: [],
+      discount: 0,
+      received: 0,
+      paid: 0,
+      paymentMode: 'Cash',
+      category: '',
+      subType: type === 'payment' ? 'in' : ''
+    });
+
+    const addLineItem = () => {
+      setTx({...tx, items: [...tx.items, { itemId: '', qty: 1, price: 0, buyPrice: 0 }]});
+    };
+
+    const updateLine = (idx, field, val) => {
+      const newItems = [...tx.items];
+      newItems[idx][field] = val;
+      if (field === 'itemId') {
+        const item = data.items.find(i => i.id === val);
+        newItems[idx].price = type === 'purchase' ? item.buyPrice : item.sellPrice;
+        newItems[idx].buyPrice = item.buyPrice;
+      }
+      setTx({...tx, items: newItems});
+    };
+
+    const removeLine = (idx) => setTx({...tx, items: tx.items.filter((_, i) => i !== idx)});
+
+    const grossTotal = tx.items?.reduce((acc, i) => acc + (i.qty * i.price), 0) || 0;
+    const finalTotal = grossTotal - parseFloat(tx.discount || 0);
+
+    const handleSave = () => {
+      if (!tx.partyId && type !== 'expense') return alert("Select Party");
+      saveRecord('transactions', { ...tx, grossTotal, finalTotal }, 'transaction');
+    };
+
+    return (
+      <div className="space-y-4 pb-10">
+        <div className="flex justify-between items-center mb-4">
+          <p className="text-xs font-bold text-gray-400 uppercase">{tx.id || 'New ' + type}</p>
+          <input type="date" className="p-1 text-sm border-none bg-transparent font-bold text-blue-600" value={tx.date} onChange={e => setTx({...tx, date: e.target.value})} />
+        </div>
+
+        {type === 'payment' && (
+          <div className="flex bg-gray-100 p-1 rounded-xl mb-4">
+            <button onClick={() => setTx({...tx, subType: 'in'})} className={`flex-1 py-2 rounded-lg text-xs font-bold ${tx.subType === 'in' ? 'bg-white shadow-sm text-green-600' : 'text-gray-500'}`}>Payment IN</button>
+            <button onClick={() => setTx({...tx, subType: 'out'})} className={`flex-1 py-2 rounded-lg text-xs font-bold ${tx.subType === 'out' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500'}`}>Payment OUT</button>
+          </div>
+        )}
+
+        {type === 'expense' && (
+          <SearchableSelect 
+            label="Category" 
+            options={data.categories.expense.map(c => ({ id: c, name: c }))} 
+            value={tx.category} 
+            onChange={v => setTx({...tx, category: v})} 
+            onAddNew={() => {
+              const name = prompt("New Category Name:");
+              if (name && !data.categories.expense.includes(name)) {
+                setData(prev => ({ ...prev, categories: { ...prev.categories, expense: [...prev.categories.expense, name] } }));
+              }
+            }}
+          />
+        )}
+
+        <SearchableSelect 
+          label="Party" 
+          options={data.parties} 
+          value={tx.partyId} 
+          onChange={v => setTx({...tx, partyId: v})} 
+          onAddNew={() => setModal({ type: 'party' })}
+        />
+
+        {type !== 'payment' && (
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <h4 className="text-xs font-bold text-gray-400 uppercase">Items</h4>
+              <button onClick={addLineItem} className="text-blue-600 text-xs font-bold">+ Add Item</button>
+            </div>
+            {tx.items.map((line, idx) => (
+              <div key={idx} className="p-3 bg-gray-50 border rounded-xl relative">
+                <button onClick={() => removeLine(idx)} className="absolute -top-2 -right-2 bg-white p-1 rounded-full shadow border text-red-500"><X size={12} /></button>
+                <SearchableSelect 
+                  label="Select Item" 
+                  options={data.items} 
+                  value={line.itemId} 
+                  onChange={v => updateLine(idx, 'itemId', v)} 
+                  onAddNew={() => setModal({ type: 'item' })}
+                />
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase font-bold">Qty</label>
+                    <input type="number" className="w-full p-2 border rounded-lg text-sm" value={line.qty} onChange={e => updateLine(idx, 'qty', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase font-bold">Price</label>
+                    <input type="number" className="w-full p-2 border rounded-lg text-sm" value={line.price} onChange={e => updateLine(idx, 'price', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase font-bold">Total</label>
+                    <div className="p-2 font-bold text-sm">{(line.qty * line.price).toFixed(2)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {type === 'payment' && (
+          <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl">
+            <label className="text-xs font-bold text-blue-600 uppercase">Amount</label>
+            <input type="number" className="w-full bg-transparent text-2xl font-bold focus:ring-0 border-none p-0" placeholder="0.00" value={tx.amount} onChange={e => setTx({...tx, amount: e.target.value, finalTotal: e.target.value})} />
+          </div>
+        )}
+
+        <div className="p-4 bg-gray-50 rounded-2xl space-y-2">
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500 font-medium">Gross Total</span>
+            <span className="font-bold">{formatCurrency(type === 'payment' ? tx.amount : grossTotal)}</span>
+          </div>
+          {type !== 'payment' && (
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-gray-500 font-medium">Discount</span>
+              <input type="number" className="w-20 p-1 border rounded text-right" value={tx.discount} onChange={e => setTx({...tx, discount: e.target.value})} />
+            </div>
+          )}
+          <div className="flex justify-between text-lg border-t pt-2 mt-2">
+            <span className="font-bold text-gray-800">Final Total</span>
+            <span className="font-black text-blue-600">{formatCurrency(type === 'payment' ? tx.amount : finalTotal)}</span>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={handleSave} className="flex-1 bg-blue-600 text-white p-4 rounded-xl font-bold">Save Transaction</button>
+          {isEdit && <button onClick={() => setConfirmDelete({ collection: 'transactions', id: record.id })} className="p-4 bg-red-100 text-red-600 rounded-xl"><Trash2 /></button>}
+        </div>
+      </div>
+    );
+  };
+
+  const StaffForm = ({ record }) => {
+    const [form, setForm] = useState(record || { name: '', mobile: '', role: 'Staff', active: true });
+    return (
+      <div className="space-y-4">
+        <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Staff Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+        <input className="w-full p-3 bg-gray-50 border rounded-xl" placeholder="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
+        <select className="w-full p-3 bg-gray-50 border rounded-xl" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
+          <option>Admin</option>
+          <option>Staff</option>
+          <option>Manager</option>
+        </select>
+        <button onClick={() => saveRecord('staff', form, 'staff')} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold">Save Staff</button>
+      </div>
+    );
+  };
+
+  const TaskForm = ({ record }) => {
+    const [form, setForm] = useState(record || { name: '', partyId: '', description: '', status: 'To Do', dueDate: '', assignedStaff: [] });
+    const party = data.parties.find(p => p.id === form.partyId);
+
+    return (
+      <div className="space-y-4">
+        <input className="w-full p-3 bg-gray-50 border rounded-xl font-bold" placeholder="Task Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+        <SearchableSelect 
+          label="Related Party" 
+          options={data.parties} 
+          value={form.partyId} 
+          onChange={v => setForm({...form, partyId: v})} 
+        />
+        {party && (
+          <div className="p-3 bg-blue-50 rounded-xl text-xs space-y-1">
+            <p className="flex items-center gap-2"><Phone size={12}/> {party.mobile}</p>
+            <p className="flex items-center gap-2"><MapPin size={12}/> {party.address}</p>
+          </div>
+        )}
+        <textarea className="w-full p-3 bg-gray-50 border rounded-xl h-24" placeholder="Description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-[10px] font-bold text-gray-400 ml-2">Due Date</label>
+            <input type="date" className="w-full p-3 bg-gray-50 border rounded-xl" value={form.dueDate} onChange={e => setForm({...form, dueDate: e.target.value})} />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-gray-400 ml-2">Status</label>
+            <select className="w-full p-3 bg-gray-50 border rounded-xl" value={form.status} onChange={e => setForm({...form, status: e.target.value})}>
+              <option>To Do</option>
+              <option>In Progress</option>
+              <option>Done</option>
+            </select>
+          </div>
+        </div>
+        
+        <div className="flex gap-2">
+          <button onClick={() => saveRecord('tasks', form, 'task')} className="flex-1 bg-blue-600 text-white p-4 rounded-xl font-bold">Save Task</button>
+          {record && <button onClick={() => setConfirmDelete({ collection: 'tasks', id: record.id })} className="p-4 bg-red-100 text-red-600 rounded-xl"><Trash2 /></button>}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 pb-24 font-sans select-none">
+      {/* Top Header */}
+      <div className="sticky top-0 z-40 bg-white/80 backdrop-blur-md px-4 py-3 border-b flex justify-between items-center">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">N</div>
+          <span className="font-black text-gray-800 tracking-tight">NEXUS ERP</span>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={() => setActiveTab('accounting')} className="p-2 hover:bg-gray-100 rounded-full"><Search size={20} className="text-gray-500" /></button>
+          <button onClick={() => setModal({ type: 'company' })} className="p-2 hover:bg-gray-100 rounded-full"><Settings size={20} className="text-gray-500" /></button>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <main className="max-w-xl mx-auto p-4">
+        {activeTab === 'dashboard' && <Dashboard />}
+        {activeTab === 'accounting' && <TransactionList />}
+        {activeTab === 'tasks' && <TaskModule />}
+        {activeTab === 'staff' && (
+          <div className="space-y-6">
+            <MasterList title="Items" collection="items" type="item" />
+            <MasterList title="Parties" collection="parties" type="party" />
+            <MasterList title="Staff" collection="staff" type="staff" />
+            <div className="p-6 bg-white border rounded-2xl">
+              <h2 className="font-bold mb-4">Backup & Export</h2>
+              <div className="flex gap-4">
+                <button onClick={() => {
+                  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data));
+                  const downloadAnchorNode = document.createElement('a');
+                  downloadAnchorNode.setAttribute("href", dataStr);
+                  downloadAnchorNode.setAttribute("download", "erp_backup.json");
+                  document.body.appendChild(downloadAnchorNode);
+                  downloadAnchorNode.click();
+                  downloadAnchorNode.remove();
+                }} className="flex-1 p-4 bg-gray-100 rounded-xl font-bold flex flex-col items-center gap-2">
+                  <Download /> Export Data
+                </button>
+                <label className="flex-1 p-4 bg-gray-100 rounded-xl font-bold flex flex-col items-center gap-2 cursor-pointer">
+                  <Upload /> Import Data
+                  <input type="file" className="hidden" onChange={e => {
+                    const file = e.target.files[0];
+                    const reader = new FileReader();
+                    reader.onload = (e) => setData(JSON.parse(e.target.result));
+                    reader.readAsText(file);
+                  }} />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Bottom Tabs */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t px-6 py-2 flex justify-between items-center z-50 safe-area-bottom shadow-[0_-5px_20px_rgba(0,0,0,0.05)]">
+        {[
+          { id: 'dashboard', icon: <LayoutDashboard />, label: 'Home' },
+          { id: 'accounting', icon: <ReceiptText />, label: 'Accounts' },
+          { id: 'tasks', icon: <CheckSquare />, label: 'Tasks' },
+          { id: 'staff', icon: <Users />, label: 'Masters' }
+        ].map(tab => (
+          <button 
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-blue-600 scale-110' : 'text-gray-400'}`}
+          >
+            {tab.icon}
+            <span className="text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Modals Container */}
+      <Modal 
+        isOpen={!!modal.type} 
+        onClose={() => setModal({ type: null, data: null })} 
+        title={modal.type ? (modal.data ? `Edit ${modal.type}` : `New ${modal.type}`) : ''}
+      >
+        {modal.type === 'company' && <CompanyForm />}
+        {modal.type === 'party' && <PartyForm record={modal.data} />}
+        {modal.type === 'item' && <ItemForm record={modal.data} />}
+        {modal.type === 'staff' && <StaffForm record={modal.data} />}
+        {modal.type === 'task' && <TaskForm record={modal.data} />}
+        {['sales', 'purchase', 'expense', 'payment'].includes(modal.type) && <TransactionForm type={modal.type} record={modal.data} />}
+      </Modal>
+
+      {/* Confirmation Modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
+          <div className="bg-white p-6 rounded-3xl w-full max-w-xs text-center">
+            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 size={32} />
+            </div>
+            <h3 className="text-xl font-bold mb-2">Are you sure?</h3>
+            <p className="text-gray-500 text-sm mb-6">This record will be permanently deleted from the database.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDelete(null)} className="flex-1 p-3 font-bold text-gray-500 bg-gray-100 rounded-xl">Cancel</button>
+              <button onClick={() => deleteRecord(confirmDelete.collection, confirmDelete.id)} className="flex-1 p-3 font-bold text-white bg-red-600 rounded-xl">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
